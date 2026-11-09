@@ -1,0 +1,164 @@
+import java.io.*;
+import java.util.*;
+
+public class FolderIndexer {
+    
+    // Список, куда мы будем складывать все найденные файлы при сканировании
+    static List<File> allFiles = new ArrayList<>();
+
+    public static void main(String[] args) {
+        Scanner scanner = new Scanner(System.in);
+        
+        System.out.println("=== Консольный индексатор папок ===");
+        System.out.print("Введите путь к папке для сканирования: ");
+        String folderPath = scanner.nextLine();
+
+        File folder = new File(folderPath);
+        
+        // Проверяем, существует ли такая папка вообще
+        if (!folder.exists() || !folder.isDirectory()) {
+            System.out.println("Ошибка: Указанный путь не существует или это не папка!");
+            return;
+        }
+
+        // 1. Сканируем файловую систему
+        System.out.println("\n[1] Сканируем папку...");
+        scanDirectory(folder);
+        System.out.println("Сканирование завершено. Найдено файлов: " + allFiles.size());
+
+        // 2. Ищем дубликаты
+        findDuplicates();
+
+        // 3. Проверяем изменения и перезаписываем индекс (вместо Базы Данных)
+        checkChangesAndSave();
+    }
+
+    /**
+     * Рекурсивный метод для обхода папок.
+     * Если натыкаемся на папку — вызываем этот же метод внутрь неё.
+     * Если натыкаемся на файл — добавляем в наш список.
+     */
+    public static void scanDirectory(File directory) {
+        File[] files = directory.listFiles();
+        
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    // Рекурсивный вызов для вложенной папки
+                    scanDirectory(file);
+                } else {
+                    // Добавляем обычный файл в список
+                    allFiles.add(file);
+                }
+            }
+        }
+    }
+
+    /**
+     * Метод для поиска дубликатов.
+     * Для простоты мы считаем дубликатами файлы, у которых абсолютно одинаковый размер в байтах.
+     */
+    public static void findDuplicates() {
+        System.out.println("\n[2] Поиск дубликатов (по размеру файла)...");
+        
+        // Карта: Ключ = Размер файла, Значение = Список путей к файлам с таким размером
+        Map<Long, List<String>> sizeMap = new HashMap<>();
+
+        for (File file : allFiles) {
+            long size = file.length();
+            
+            // Если такого размера еще не было в карте, создаем для него новый список
+            if (!sizeMap.containsKey(size)) {
+                sizeMap.put(size, new ArrayList<>());
+            }
+            // Добавляем путь к файлу в список для этого размера
+            sizeMap.get(size).add(file.getAbsolutePath());
+        }
+
+        boolean hasDuplicates = false;
+        
+        // Проходим по всей карте и смотрим, где списки содержат больше 1 файла
+        for (Map.Entry<Long, List<String>> entry : sizeMap.entrySet()) {
+            if (entry.getValue().size() > 1) {
+                hasDuplicates = true;
+                System.out.println("Возможные дубликаты (Размер: " + entry.getKey() + " байт):");
+                for (String filePath : entry.getValue()) {
+                    System.out.println("  -> " + filePath);
+                }
+            }
+        }
+
+        if (!hasDuplicates) {
+            System.out.println("Дубликаты не обнаружены.");
+        }
+    }
+
+    /**
+     * Метод для симуляции БД.
+     * Читает старый текстовый файл (если он есть), сравнивает с текущим сканированием,
+     * выводит разницу (что добавилось, что удалилось) и перезаписывает файл.
+     */
+    public static void checkChangesAndSave() {
+        System.out.println("\n[3] Проверка изменений (сравнение с прошлым запуском)...");
+        
+        File indexFile = new File("folder_index.txt");
+        Set<String> oldFiles = new HashSet<>();
+
+        // Шаг А: Пытаемся прочитать старый индекс из файла
+        if (indexFile.exists()) {
+            try (BufferedReader reader = new BufferedReader(new FileReader(indexFile))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    oldFiles.add(line); // Заполняем множество старыми путями файлов
+                }
+            } catch (IOException e) {
+                System.out.println("Не удалось прочитать файл индекса: " + e.getMessage());
+            }
+        }
+
+        // Переводим текущий список файлов в Set для быстрого сравнения
+        Set<String> currentFiles = new HashSet<>();
+        for (File file : allFiles) {
+            currentFiles.add(file.getAbsolutePath());
+        }
+
+        // Шаг Б: Если старый индекс существовал, ищем разницу
+        if (!oldFiles.isEmpty()) {
+            System.out.println("Разница с прошлым состоянием папки:");
+            
+            // Если файл есть в текущих, но его не было в старых -> он НОВЫЙ
+            int newCount = 0;
+            for (String path : currentFiles) {
+                if (!oldFiles.contains(path)) {
+                    System.out.println("  [+ ДОБАВЛЕН]: " + path);
+                    newCount++;
+                }
+            }
+
+            // Если файл был в старых, но его нет в текущих -> он УДАЛЕН
+            int deletedCount = 0;
+            for (String path : oldFiles) {
+                if (!currentFiles.contains(path)) {
+                    System.out.println("  [- УДАЛЕН]: " + path);
+                    deletedCount++;
+                }
+            }
+            
+            if (newCount == 0 && deletedCount == 0) {
+                System.out.println("Изменений не обнаружено. Всё совпадает с резервной копией индекса.");
+            }
+        } else {
+            System.out.println("Это первый запуск программы (или файл индекса удален). Сравнивать не с чем.");
+        }
+
+        // Шаг В: Записываем текущие файлы в "базу" (текстовый файл) для следующего раза
+        try (PrintWriter writer = new PrintWriter(new FileWriter(indexFile))) {
+            for (String path : currentFiles) {
+                writer.println(path);
+            }
+            System.out.println("\nТекущее состояние папки сохранено в файл 'folder_index.txt'.");
+        } catch (IOException e) {
+            System.out.println("Ошибка при сохранении индекса в файл: " + e.getMessage());
+        }
+    }
+}
